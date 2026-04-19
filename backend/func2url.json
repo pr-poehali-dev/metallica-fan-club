@@ -1,3 +1,5 @@
 {
+  "config-sync": "https://functions.poehali.dev/c5790c62-9b53-4691-8f02-19721a790038",
+  "s3-health": "https://functions.poehali.dev/7d861c1f-970e-452a-8f72-322e56a4416f",
   "db-check": "https://functions.poehali.dev/eaa9c7bb-865a-4cb7-b17c-5f795dbdbca2"
 }
