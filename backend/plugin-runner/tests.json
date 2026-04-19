@@ -1,0 +1,21 @@
+{
+  "tests": [
+    {
+      "name": "Unauthorized without token",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial",
+      "expectedBody": {"error": "Unauthorized"}
+    },
+    {
+      "name": "Missing key param",
+      "method": "GET",
+      "path": "/",
+      "headers": {"X-Admin-Token": "{{ADMIN_TOKEN}}"},
+      "expectedStatus": 400,
+      "bodyMatcher": "partial",
+      "expectedBody": {"error": "Параметр key обязателен"}
+    }
+  ]
+}
