@@ -5,6 +5,10 @@ const DB_CHECK_URL = "https://functions.poehali.dev/eaa9c7bb-865a-4cb7-b17c-5f79
 
 interface DbData {
   status: string;
+  failover?: boolean;
+  failover_host?: string | null;
+  original_host?: string | null;
+  error?: string;
   connection: { host: string; port: string; dbname: string; user: string };
   pg_version: string;
   server_time: string;
@@ -14,6 +18,16 @@ interface DbData {
   connections_by_state: Record<string, number>;
   tables: { schema: string; name: string; size: string; size_bytes: number; rows: number }[];
   db_stats: { commits: number; rollbacks: number; blocks_read: number; blocks_hit: number; cache_hit_ratio: number };
+}
+
+interface FailoverResult {
+  status: string;
+  failover_host: string;
+  original_host: string;
+  connection: { host: string; port: string; dbname: string; user: string };
+  error?: string;
+  pg_version?: string;
+  server_time?: string;
 }
 
 function formatNumber(n: number) {
@@ -40,6 +54,9 @@ export default function Index() {
   const [loading, setLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [failoverHost, setFailoverHost] = useState("");
+  const [failoverResult, setFailoverResult] = useState<FailoverResult | null>(null);
+  const [failoverLoading, setFailoverLoading] = useState(false);
 
   const fetchData = useCallback(async (t?: string) => {
     const useToken = t ?? token;
@@ -76,6 +93,21 @@ export default function Index() {
     localStorage.setItem("admin_token", t);
     setToken(t);
     fetchData(t);
+  }
+
+  async function runFailoverTest() {
+    if (!failoverHost.trim()) return;
+    setFailoverLoading(true);
+    setFailoverResult(null);
+    try {
+      const url = `${DB_CHECK_URL}?failover_host=${encodeURIComponent(failoverHost.trim())}`;
+      const res = await fetch(url, { headers: { "X-Admin-Token": token } });
+      const json = await res.json();
+      setFailoverResult({ ...json, failover_host: failoverHost.trim() });
+    } catch {
+      setFailoverResult({ status: "error", failover_host: failoverHost.trim(), original_host: "", connection: { host: failoverHost.trim(), port: "", dbname: "", user: "" }, error: "Ошибка сети" });
+    }
+    setFailoverLoading(false);
   }
 
   const pgShort = data?.pg_version.match(/PostgreSQL ([\d.]+)/)?.[1] ?? data?.pg_version ?? "—";
@@ -284,6 +316,56 @@ export default function Index() {
                 </div>
               </section>
             )}
+
+            <section className="section">
+              <div className="section-header">
+                <Icon name="ShieldCheck" size={16} />
+                <h2>DR Failover тест</h2>
+              </div>
+              <div className="failover-body">
+                <p className="failover-desc">
+                  Введите хост резервного сервера — функция возьмёт все параметры текущей БД и попробует подключиться через него.
+                </p>
+                <div className="failover-form">
+                  <input
+                    className="failover-input"
+                    placeholder="replica.example.com или 10.0.0.5"
+                    value={failoverHost}
+                    onChange={e => setFailoverHost(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && runFailoverTest()}
+                  />
+                  <button
+                    className="ctrl-btn primary"
+                    onClick={runFailoverTest}
+                    disabled={failoverLoading || !failoverHost.trim()}
+                  >
+                    {failoverLoading ? <Icon name="Loader" size={14} /> : <Icon name="Zap" size={14} />}
+                    {failoverLoading ? "Тест..." : "Запустить тест"}
+                  </button>
+                </div>
+                {failoverResult && (
+                  <div className={`failover-result ${failoverResult.status === "ok" ? "ok" : "err"}`}>
+                    <div className="failover-result-header">
+                      <Icon name={failoverResult.status === "ok" ? "CheckCircle" : "XCircle"} size={18} />
+                      <span>
+                        {failoverResult.status === "ok"
+                          ? `Успешно подключились к ${failoverResult.failover_host}`
+                          : `Не удалось подключиться к ${failoverResult.failover_host}`}
+                      </span>
+                    </div>
+                    {failoverResult.error && (
+                      <div className="failover-error-msg">{failoverResult.error}</div>
+                    )}
+                    {failoverResult.status === "ok" && failoverResult.pg_version && (
+                      <div className="failover-meta">
+                        <span>PG: {failoverResult.pg_version.match(/PostgreSQL ([\d.]+)/)?.[1]}</span>
+                        {failoverResult.server_time && <span>Время: {failoverResult.server_time.split(".")[0].replace("T", " ")}</span>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </section>
 
             <div className="server-time">
               Серверное время БД: {data.server_time.split(".")[0].replace("T", " ")}
@@ -533,5 +615,37 @@ const styles = `
   .server-time {
     text-align: right; font-size: 0.72rem; color: #6b6b72;
     padding: 12px 0; letter-spacing: 0.04em;
+  }
+
+  .failover-body { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .failover-desc { font-size: 0.82rem; color: #6b6b72; line-height: 1.6; margin: 0; }
+  .failover-form { display: flex; gap: 10px; flex-wrap: wrap; }
+  .failover-input {
+    flex: 1; min-width: 220px;
+    background: #1c1c1f; border: 1px solid #2a2a2e;
+    color: #e8e8ea; padding: 8px 14px;
+    font-family: "IBM Plex Sans", monospace; font-size: 0.85rem;
+    outline: none; transition: border-color 0.2s;
+  }
+  .failover-input:focus { border-color: #c8a96e; }
+  .failover-result {
+    border: 1px solid; padding: 14px 16px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .failover-result.ok { border-color: #4ade8033; background: #4ade8008; }
+  .failover-result.err { border-color: #f8717133; background: #f8717108; }
+  .failover-result-header {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 0.85rem; font-weight: 500;
+  }
+  .failover-result.ok .failover-result-header { color: #4ade80; }
+  .failover-result.err .failover-result-header { color: #f87171; }
+  .failover-error-msg {
+    font-family: "IBM Plex Sans", monospace; font-size: 0.75rem;
+    color: #f87171; opacity: 0.8; padding-left: 28px;
+  }
+  .failover-meta {
+    display: flex; gap: 20px; padding-left: 28px;
+    font-size: 0.75rem; color: #6b6b72;
   }
 `;

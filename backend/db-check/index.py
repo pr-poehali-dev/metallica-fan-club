@@ -12,8 +12,17 @@ CORS_HEADERS = {
 }
 
 
+def build_dsn(params: dict) -> str:
+    """Собирает DSN-строку из словаря параметров."""
+    parts = []
+    for key in ('host', 'port', 'dbname', 'user', 'password'):
+        if key in params:
+            parts.append(f"{key}={params[key]}")
+    return ' '.join(parts)
+
+
 def handler(event: dict, context) -> dict:
-    """Мониторинг базы данных: статус, метрики, таблицы, соединения."""
+    """Мониторинг базы данных: статус, метрики, таблицы, соединения. Поддерживает DR failover тест через ?failover_host=."""
 
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': {**CORS_HEADERS, 'Access-Control-Max-Age': '86400'}, 'body': ''}
@@ -29,7 +38,39 @@ def handler(event: dict, context) -> dict:
     dsn = os.environ['DATABASE_URL']
     params = psycopg2.extensions.parse_dsn(dsn)
 
-    conn = psycopg2.connect(dsn)
+    query_params = event.get('queryStringParameters') or {}
+    failover_host = query_params.get('failover_host', '').strip()
+    is_failover = bool(failover_host)
+
+    if is_failover:
+        original_host = params.get('host', '—')
+        params['host'] = failover_host
+        dsn = build_dsn(params)
+
+    connect_error = None
+    try:
+        conn = psycopg2.connect(dsn, connect_timeout=5)
+    except Exception as e:
+        connect_error = str(e)
+        result = {
+            'status': 'error',
+            'failover': is_failover,
+            'failover_host': failover_host if is_failover else None,
+            'original_host': original_host if is_failover else params.get('host', '—'),
+            'connection': {
+                'host': params.get('host', '—'),
+                'port': params.get('port', '5432'),
+                'dbname': params.get('dbname', '—'),
+                'user': params.get('user', '—'),
+            },
+            'error': connect_error,
+        }
+        return {
+            'statusCode': 200,
+            'headers': CORS_HEADERS,
+            'body': json.dumps(result, ensure_ascii=False),
+        }
+
     cur = conn.cursor()
 
     cur.execute('SELECT version(), now()::text')
@@ -109,6 +150,9 @@ def handler(event: dict, context) -> dict:
         'headers': CORS_HEADERS,
         'body': json.dumps({
             'status': 'ok',
+            'failover': is_failover,
+            'failover_host': failover_host if is_failover else None,
+            'original_host': original_host if is_failover else None,
             'connection': {
                 'host': params.get('host', '—'),
                 'port': params.get('port', '5432'),
